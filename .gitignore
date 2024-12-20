@@ -1,0 +1,8 @@
+.direnv
+.git
+.jj
+
+target/
+zig-out/
+
+generator.go
