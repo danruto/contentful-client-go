@@ -4,11 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"time"
+)
+
+var (
+	ErrUrlNotSet   = errors.New("The client url is not set by either the env var CONTENTFUL_URL or the builder method WithUrl")
+	ErrTokenNotSet = errors.New("The client token is not set by either the env var CONTENTFUL_TOKEN or the builder method WithToken")
 )
 
 type ContentfulClient struct {
@@ -45,7 +52,22 @@ func (c *ContentfulClient) WithToken(token string) *ContentfulClient {
 	return c
 }
 
+func (c *ContentfulClient) validate() error {
+	if len(c.url) == 0 {
+		return ErrUrlNotSet
+	}
+	if len(c.token) == 0 {
+		return ErrTokenNotSet
+	}
+
+	return nil
+}
+
 func (c *ContentfulClient) Get(req ContentfulRequest, target any) error {
+	if err := c.validate(); err != nil {
+		return err
+	}
+
 	jsonBody, err := json.Marshal(req)
 	if err != nil {
 		return err
@@ -71,7 +93,7 @@ func (c *ContentfulClient) Get(req ContentfulRequest, target any) error {
 		return err
 	}
 
-	err = json.Unmarshal(body, &target)
+	err = json.Unmarshal(body, target)
 	if err != nil {
 		return err
 	}
@@ -83,14 +105,18 @@ func (c *ContentfulClient) GetOrFetch(cacher ContentfulCacher, prefix string, re
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	key := cacher.generateKey(prefix, &req)
-	err := cacher.get(ctx, key, target)
+	key := cacher.GenerateKey(prefix, &req)
+	payload, err := cacher.Get(ctx, key)
 	if err != nil {
-		return err
+		log.Printf("[ccgo] Failed to find %s in cache", prefix)
+	} else {
+		if err = payload.Decode(target); err != nil {
+			log.Printf("[ccgo] Failed to decode payload %s", payload)
+		}
 	}
 
 	// Cache was found
-	if target != nil {
+	if err == nil && target != nil {
 		return nil
 	}
 
@@ -99,7 +125,7 @@ func (c *ContentfulClient) GetOrFetch(cacher ContentfulCacher, prefix string, re
 		return err
 	}
 
-	err = cacher.put(ctx, key, target)
+	err = cacher.Put(ctx, key, target)
 	if err != nil {
 		return err
 	}
